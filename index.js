@@ -57,7 +57,6 @@ async function run() {
         // User create
         app.post('/users', async (req, res) => {
             const { pin, email, number, ...userData } = req.body;
-
             const existingUser = await userCollection.findOne({ $or: [{ email }, { number }] });
 
             if (existingUser) {
@@ -65,13 +64,11 @@ async function run() {
             }
 
             const hashedPin = await bcrypt.hash(pin, 10);
-
             const newUser = {
                 email,
                 number,
                 ...userData,
                 pin: hashedPin,
-                status: 'pending'
             };
 
             await userCollection.insertOne(newUser);
@@ -92,7 +89,6 @@ async function run() {
             }
 
             const isMatch = await bcrypt.compare(pin, user.pin);
-
             if (!isMatch) {
                 return res.status(400).send({ message: 'Invalid PIN.' });
             }
@@ -106,10 +102,14 @@ async function run() {
             res.send({ message: 'Login successful!', id: user._id, email: user.email });
         });
 
+        // private routes
+        app.get('/protected', verifyToken, (req, res) => {
+            res.json({ message: 'Protected data', user: req.user });
+        });
+
         // Fetch user data by ID
         app.get('/users/:id', verifyToken, async (req, res) => {
             const { id } = req.params;
-
             const user = await userCollection.findOne({ _id: new ObjectId(id) });
 
             if (!user) {
@@ -125,6 +125,30 @@ async function run() {
         app.post('/logout', (req, res) => {
             res.clearCookie('token', { httpOnly: true, secure: false });
             res.send({ message: 'Logout successful!' });
+        });
+
+        // Fetch all users
+        app.get('/users', verifyToken, async (req, res) => {
+            const users = await userCollection.find({}).toArray();
+            const usersData = users.map(({ pin, ...userData }) => userData);
+            res.status(200).json(usersData);
+        });
+
+        // Update user status
+        app.patch('/users/:id', verifyToken, async (req, res) => {
+            const { id } = req.params;
+            const { status } = req.body;
+
+            const result = await userCollection.updateOne(
+                { _id: new ObjectId(id) },
+                { $set: { status } }
+            );
+
+            if (result.matchedCount > 1) {
+                return res.status(404).send({ message: 'User not found' });
+            }
+
+            res.send({ message: 'User status updated successfully' });
         });
 
         // Send a ping to confirm a successful connection
