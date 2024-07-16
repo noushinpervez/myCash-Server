@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config();
+const bcrypt = require('bcrypt');
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -28,14 +29,51 @@ async function run() {
 
         const userCollection = client.db('mobileFinancialServiceDB').collection('users');
 
+        // user create
         app.post('/users', async (req, res) => {
-            const userData = {
-                ...req.body,
+            const { pin, email, number, ...userData } = req.body;
+
+            const existingUser = await userCollection.findOne({ $or: [{ email }, { number }] });
+
+            if (existingUser) {
+                return res.status(400).send({ message: 'User already exists with this email or mobile number.' });
+            }
+
+            const hashedPin = await bcrypt.hash(pin, 10);
+
+            const newUser = {
+                email,
+                number,
+                ...userData,
+                pin: hashedPin,
                 status: 'pending'
             };
-            const result = await userCollection.insertOne(userData);
-            res.send(result);
-        })
+
+            await userCollection.insertOne(newUser);
+            res.send({
+                message: 'User registered successfully!'});
+        });
+
+        // user login
+        app.post('/login', async (req, res) => {
+            const { identifier, pin } = req.body;
+
+            const user = await userCollection.findOne({
+                $or: [{ email: identifier }, { number: identifier }]
+            });
+
+            if (!user) {
+                return res.status(400).send({ message: 'User not found.' });
+            }
+
+            const isMatch = await bcrypt.compare(pin, user.pin);
+
+            if (!isMatch) {
+                return res.status(400).send({ message: 'Invalid PIN.' });
+            }
+
+            res.send({ message: 'Login successful!' });
+        });
 
         // Send a ping to confirm a successful connection
         // await client.db('admin').command({ ping: 1 });
