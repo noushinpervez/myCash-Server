@@ -31,7 +31,6 @@ const client = new MongoClient(uri, {
 // Middleware to verify JWT
 const verifyToken = (req, res, next) => {
     const token = req.cookies?.token;
-
     if (!token) {
         return res.status(403).send({ message: 'Forbidden' });
     }
@@ -41,8 +40,26 @@ const verifyToken = (req, res, next) => {
             res.clearCookie('token');
             return res.status(401).send({ message: 'Unauthorized' });
         }
-
         req.user = decoded;
+        next();
+    });
+};
+
+const isAdmin = (req, res, next) => {
+    const token = req.cookies?.token;
+    if (!token) {
+        return res.status(403).send({ message: 'Forbidden' });
+    }
+
+    jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+        if (err) {
+            res.clearCookie('token');
+            return res.status(401).send({ message: 'Unauthorized' });
+        }
+        req.user = decoded;
+        if (decoded.role !== 'Admin') {
+            return res.status(403).send({ message: 'Access denied.' });
+        }
         next();
     });
 };
@@ -58,7 +75,6 @@ async function run() {
         app.post('/users', async (req, res) => {
             const { pin, email, number, ...userData } = req.body;
             const existingUser = await userCollection.findOne({ $or: [{ email }, { number }] });
-
             if (existingUser) {
                 return res.status(400).send({ message: 'User already exists with this email or mobile number.' });
             }
@@ -83,7 +99,6 @@ async function run() {
             const user = await userCollection.findOne({
                 $or: [{ email: identifier }, { number: identifier }]
             });
-
             if (!user) {
                 return res.status(400).send({ message: 'User not found.' });
             }
@@ -94,7 +109,7 @@ async function run() {
             }
 
             // Create a token
-            const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET, {
+            const token = jwt.sign({ id: user._id, email: user.email, role: user.role }, process.env.JWT_SECRET, {
                 expiresIn: '1h',
             });
 
@@ -111,13 +126,11 @@ async function run() {
         app.get('/users/:id', verifyToken, async (req, res) => {
             const { id } = req.params;
             const user = await userCollection.findOne({ _id: new ObjectId(id) });
-
             if (!user) {
                 return res.status(404).send({ message: 'User not found' });
             }
 
             const { pin, ...userData } = user;
-
             res.status(200).json(userData);
         });
 
@@ -128,27 +141,32 @@ async function run() {
         });
 
         // Fetch all users
-        app.get('/users', verifyToken, async (req, res) => {
+        app.get('/users', verifyToken, isAdmin, async (req, res) => {
             const users = await userCollection.find({}).toArray();
             const usersData = users.map(({ pin, ...userData }) => userData);
             res.status(200).json(usersData);
         });
 
-        // Update user status
-        app.patch('/users/:id', verifyToken, async (req, res) => {
+        // Update user status and new user approval balance
+        app.patch('/users/:id', verifyToken, isAdmin, async (req, res) => {
             const { id } = req.params;
             const { status } = req.body;
+            const user = await userCollection.findOne({ _id: new ObjectId(id) });
+            let newBalance = user.balance;
+            if (status === 'active' && !user.hasReceivedBonus) {
+                if (user.role === 'User') {
+                    newBalance += 40;
+                } else if (user.role === 'Agent') {
+                    newBalance += 10000;
+                }
+                user.hasReceivedBonus = true;
+            }
 
             const result = await userCollection.updateOne(
                 { _id: new ObjectId(id) },
-                { $set: { status } }
+                { $set: { status, balance: newBalance, hasReceivedBonus: user.hasReceivedBonus } }
             );
-
-            if (result.matchedCount > 1) {
-                return res.status(404).send({ message: 'User not found' });
-            }
-
-            res.send({ message: 'User status updated successfully' });
+            res.send({ modifiedCount: result.modifiedCount, message: 'User status updated successfully' });
         });
 
         // Send a ping to confirm a successful connection
