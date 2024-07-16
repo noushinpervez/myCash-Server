@@ -38,6 +38,7 @@ const verifyToken = (req, res, next) => {
 
     jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
         if (err) {
+            res.clearCookie('token');
             return res.status(401).send({ message: 'Unauthorized' });
         }
 
@@ -103,6 +104,27 @@ async function run() {
 
             res.cookie('token', token, { httpOnly: true, secure: false });
             res.send({ message: 'Login successful!', id: user._id, email: user.email });
+        });
+
+        // Fetch user data by ID
+        app.get('/users/:id', verifyToken, async (req, res) => {
+            const { id } = req.params;
+
+            const user = await userCollection.findOne({ _id: new ObjectId(id) });
+
+            if (!user) {
+                return res.status(404).send({ message: 'User not found' });
+            }
+
+            const { pin, ...userData } = user;
+
+            res.status(200).json(userData);
+        });
+
+        // Logout
+        app.post('/logout', (req, res) => {
+            res.clearCookie('token', { httpOnly: true, secure: false });
+            res.send({ message: 'Logout successful!' });
         });
 
         // Send a ping to confirm a successful connection
