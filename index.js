@@ -3,13 +3,19 @@ const cors = require('cors');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config();
 const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
 
 const app = express();
 const port = process.env.PORT || 5000;
 
-// middleware
+// Middleware
 app.use(express.json());
-app.use(cors());
+app.use(cookieParser());
+app.use(cors({
+    origin: ['http://localhost:5173'],
+    credentials: true
+}));
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.9crls8f.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
@@ -22,6 +28,24 @@ const client = new MongoClient(uri, {
     }
 });
 
+// Middleware to verify JWT
+const verifyToken = (req, res, next) => {
+    const token = req.cookies?.token;
+
+    if (!token) {
+        return res.status(403).send({ message: 'Forbidden' });
+    }
+
+    jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+        if (err) {
+            return res.status(401).send({ message: 'Unauthorized' });
+        }
+
+        req.user = decoded;
+        next();
+    });
+};
+
 async function run() {
     try {
         // Connect the client to the server	(optional starting in v4.7)
@@ -29,7 +53,7 @@ async function run() {
 
         const userCollection = client.db('mobileFinancialServiceDB').collection('users');
 
-        // user create
+        // User create
         app.post('/users', async (req, res) => {
             const { pin, email, number, ...userData } = req.body;
 
@@ -51,13 +75,13 @@ async function run() {
 
             await userCollection.insertOne(newUser);
             res.send({
-                message: 'User registered successfully!'});
+                message: 'User registered successfully!'
+            });
         });
 
-        // user login
+        // User login
         app.post('/login', async (req, res) => {
             const { identifier, pin } = req.body;
-
             const user = await userCollection.findOne({
                 $or: [{ email: identifier }, { number: identifier }]
             });
@@ -72,7 +96,13 @@ async function run() {
                 return res.status(400).send({ message: 'Invalid PIN.' });
             }
 
-            res.send({ message: 'Login successful!' });
+            // Create a token
+            const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET, {
+                expiresIn: '1h',
+            });
+
+            res.cookie('token', token, { httpOnly: true, secure: false });
+            res.send({ message: 'Login successful!', id: user._id, email: user.email });
         });
 
         // Send a ping to confirm a successful connection
